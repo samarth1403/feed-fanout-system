@@ -169,7 +169,59 @@ Each completed feature spec gets one entry:
 
 ### 04 - kafka-producer
 
-- **Status:** Not started
+- **Status:** Done
+- **What was built:** `KafkaService` (`src/kafka/kafka.service.ts`) producer
+  updated per spec: `idempotent: true` on producer creation, and every
+  `publish()` sends with `acks: -1` (KafkaJS's numeric equivalent of the
+  spec's `acks: 'all'` — kafkajs's `send()` type takes a number, not the
+  string `'all'`; -1 requests ack from every in-sync replica and is also
+  required by kafkajs whenever `idempotent: true` is set). Connection
+  lifecycle (`onModuleInit`/`onModuleDestroy`) was already in place from
+  spec 01 and already fails loudly on bootstrap connect errors (no
+  try/catch), matching this spec's requirement unchanged.
+  `PostsService.createPost` (spec 03) now publishes a `post.created` event
+  to `KafkaService.publish()` after the Postgres write succeeds, with the
+  exact contract from architecture-context.md (`postId`, `authorId`,
+  `createdAt` as an ISO string via `post.createdAt.toISOString()`). The
+  publish call is wrapped in try/catch inside `PostsService` (not
+  `KafkaService`) per the spec's error-handling section: failures are
+  logged via `Logger` with the `postId` and the error, then swallowed —
+  never thrown to the controller, never rolling back the already-committed
+  post. `PostsModule` now imports `KafkaModule`. `KafkaService.publish` was
+  made generic (`publish<T extends Record<string, unknown>>`) purely to
+  satisfy strict-mode structural typing for the event payload type — no
+  behavior change. Unit tests added to `posts.service.spec.ts` (mocking
+  `KafkaService`): publish is not called when author lookup 404s, the
+  event payload matches the contract, and `createPost` still resolves with
+  the post when `kafka.publish` rejects — 22 tests passing across all spec
+  files, `nest build` and `tsc --noEmit` both clean.
+  Verified against the live stack end-to-end: `POST /posts` produces a
+  `post.created` message on the topic matching the contract exactly
+  (confirmed via `kafka-console-consumer`); killing the Kafka container and
+  calling `POST /posts` still returned 201 (post persisted in Postgres) and
+  logged a clear `[PostsService] Failed to publish post.created event for
+  post <id>` error line; restarting Kafka and creating a new post
+  afterward published successfully again immediately, with no producer
+  crash or stuck state from the earlier failure.
+- **Deviations from spec:** None from the spec's own scope.
+- **Notes:** Flagged (not silently resolved) during verification: with
+  Kafka killed, `POST /posts` still returned 201 as required, but took
+  ~17s to do so — KafkaJS's default producer retry policy (5 retries,
+  exponential backoff) runs *inside* the single `producer.send()` call
+  before it finally rejects, and `PostsService` awaits that call before
+  responding. This isn't `PostsService` adding its own retry loop (the
+  spec's "not retried synchronously inside the request" line, read
+  literally, is about not wrapping `kafka.publish()` in manual retry logic,
+  which this implementation doesn't do), but it does mean a real request
+  can block for several seconds when Kafka is down, which is in tension
+  with the architecture's stated goal of not coupling post-creation latency
+  to Kafka's health. This spec's "Producer configuration" section only
+  locks `idempotent: true`, `acks: 'all'`, and single-partition — it says
+  nothing about retry count or request timeout, so tuning those down
+  (e.g. `retry: { retries: 0 }` or a short `requestTimeout`) would be
+  adding a config decision outside this spec's explicit scope. Left as
+  KafkaJS defaults pending a decision from the human on whether to
+  fast-fail instead; acceptance criteria as written are met either way.
 
 ### 05 - kafka-consumer-fanout
 

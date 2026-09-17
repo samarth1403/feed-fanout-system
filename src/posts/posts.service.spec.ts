@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Post, type User } from '../generated/prisma/client.js';
+import { KafkaService } from '../kafka/kafka.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PostsService } from './posts.service.js';
 
@@ -14,6 +15,12 @@ function createPrismaMock() {
       findUnique: vi.fn(),
     },
   } as unknown as PrismaService;
+}
+
+function createKafkaMock() {
+  return {
+    publish: vi.fn().mockResolvedValue(undefined),
+  } as unknown as KafkaService;
 }
 
 function makeUser(overrides: Partial<User> = {}): User {
@@ -38,11 +45,13 @@ function makePost(overrides: Partial<Post> = {}): Post {
 
 describe('PostsService', () => {
   let prisma: ReturnType<typeof createPrismaMock>;
+  let kafka: ReturnType<typeof createKafkaMock>;
   let service: PostsService;
 
   beforeEach(() => {
     prisma = createPrismaMock();
-    service = new PostsService(prisma);
+    kafka = createKafkaMock();
+    service = new PostsService(prisma, kafka);
   });
 
   describe('createPost', () => {
@@ -53,6 +62,7 @@ describe('PostsService', () => {
         service.createPost({ authorId: 'missing-user', content: 'hello' }),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(prisma.post.create).not.toHaveBeenCalled();
+      expect(kafka.publish).not.toHaveBeenCalled();
     });
 
     it('creates and returns the post when the author exists', async () => {
@@ -66,6 +76,31 @@ describe('PostsService', () => {
       expect(prisma.post.create).toHaveBeenCalledWith({
         data: { authorId: 'user-1', content: 'hello world' },
       });
+    });
+
+    it('publishes a post.created event with the expected payload', async () => {
+      const post = makePost();
+      vi.mocked(prisma.user.findUnique).mockResolvedValue(makeUser());
+      vi.mocked(prisma.post.create).mockResolvedValue(post);
+
+      await service.createPost({ authorId: 'user-1', content: 'hello world' });
+
+      expect(kafka.publish).toHaveBeenCalledWith('post.created', {
+        postId: post.id,
+        authorId: post.authorId,
+        createdAt: post.createdAt.toISOString(),
+      });
+    });
+
+    it('still returns the created post when the Kafka publish fails', async () => {
+      const post = makePost();
+      vi.mocked(prisma.user.findUnique).mockResolvedValue(makeUser());
+      vi.mocked(prisma.post.create).mockResolvedValue(post);
+      vi.mocked(kafka.publish).mockRejectedValue(new Error('broker unreachable'));
+
+      await expect(
+        service.createPost({ authorId: 'user-1', content: 'hello world' }),
+      ).resolves.toEqual(post);
     });
   });
 

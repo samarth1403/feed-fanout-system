@@ -26,7 +26,9 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
       clientId: 'feed-fanout',
       brokers: [this.configService.getOrThrow<string>('KAFKA_BROKER')],
     });
-    this.producer = this.kafka.producer();
+    // idempotent producer protects against duplicate publishes if the producer
+    // itself retries a send internally, per feature-spec 04
+    this.producer = this.kafka.producer({ idempotent: true });
   }
 
   async onModuleInit(): Promise<void> {
@@ -38,10 +40,14 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
     await this.producer.disconnect();
   }
 
-  async publish(topic: string, message: Record<string, unknown>): Promise<void> {
+  async publish<T extends Record<string, unknown>>(topic: string, message: T): Promise<void> {
     await this.producer.send({
       topic,
       messages: [{ value: JSON.stringify(message) }],
+      // KafkaJS's `acks` is numeric, not the string 'all' — -1 requests
+      // acknowledgment from every in-sync replica (the durability the spec
+      // calls "acks: 'all'"), and is also required alongside idempotent: true
+      acks: -1,
     });
   }
 
