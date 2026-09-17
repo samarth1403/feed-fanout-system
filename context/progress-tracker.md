@@ -121,7 +121,51 @@ Each completed feature spec gets one entry:
 
 ### 03 - posts-module
 
-- **Status:** Spec locked
+- **Status:** Done
+- **What was built:** `PostsModule` (`POST /posts`, `GET /posts/:id`) as a
+  self-contained business module importing `PrismaModule` directly, no
+  cross-module service calls. Added the `Post` model to `schema.prisma`
+  (uuid PK, `authorId` FK → `User`, `content`, `createdAt`) plus the
+  `posts Post[]` relation field on `User`, exactly per spec. `CreatePostDto`
+  validates `authorId` as a required UUID and `content` as a required
+  non-empty string capped at 500 chars. `PostsService.createPost` looks up
+  the author via `PrismaService.user.findUnique` first and throws
+  `NotFoundException` on a miss (mirroring spec 02's
+  `FollowsService.createFollow` pattern for `followerId`/`followingId`)
+  before inserting the post; `findById` follows the same
+  find-or-`NotFoundException` pattern as `UsersService.findById`. No Kafka
+  publishing — persistence only, per this spec's explicit scope boundary
+  with spec 04. Unit tests added (`posts.service.spec.ts`, mocking
+  `PrismaService`, 4 tests) covering both the not-found and happy paths for
+  `createPost` and `findById`. Verified against the live stack: user
+  creation → valid post creation (201), non-existent-but-well-formed
+  `authorId` (404), malformed `authorId`/missing `content` (400 validation
+  errors), `GET /posts/:id` happy path (200) and 404 all exercised manually
+  via curl against a running instance; full `nest build` and `vitest run`
+  (20 tests across all specs) also pass clean.
+- **Deviations from spec:** None from the spec's own scope. One
+  implementation-detail naming fix: `PostsController` imports both the Nest
+  `@Post()` decorator and the Prisma `Post` model type, which collide by
+  name — the decorator import is aliased to `HttpPost` (matching the
+  pattern already used for the Prisma `Post` type elsewhere), a mechanical
+  fix with no scope impact.
+- **Notes:** Found and flagged a migration/DB drift before writing any spec
+  code: the dev Postgres database already had a `Post` table and a
+  `_prisma_migrations` row (`20260916191442_add_posts`, applied
+  2026-09-16 19:14:42) matching this spec's exact schema, but the
+  corresponding `migration.sql` file was missing from
+  `prisma/migrations/` on disk (only an empty, untracked directory of that
+  name remained) and `schema.prisma` on disk had no `Post` model —
+  apparent leftover from an earlier, incomplete session that ran
+  `prisma migrate dev` but never got the migration file saved. `prisma
+  migrate dev` refused to proceed and offered only `prisma migrate reset`,
+  which would have dropped the dev DB's existing data (7 Users, 2 Follows
+  at the time). Flagged to the human per `ai-workflow-rules.md` rather than
+  resolving unilaterally; approved path was to hand-write a
+  `migration.sql` matching the schema already applied (verified via
+  `\d "Post"` in the container) under the existing migration name — no
+  `prisma migrate reset`, no data loss, `prisma migrate status` confirmed
+  in sync afterward.
 
 ### 04 - kafka-producer
 

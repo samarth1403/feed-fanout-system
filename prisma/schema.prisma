@@ -15,6 +15,7 @@ model User {
 
   followers Follow[] @relation("UserFollowers")
   following Follow[] @relation("UserFollowing")
+  posts     Post[]
 }
 
 model Follow {
@@ -25,4 +26,12 @@ model Follow {
   following User @relation("UserFollowers", fields: [followingId], references: [id])
 
   @@id([followerId, followingId])
+}
+
+model Post {
+  id        String   @id @default(uuid())
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  content   String
+  createdAt DateTime @default(now())
 }

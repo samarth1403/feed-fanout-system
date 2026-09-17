@@ -26,8 +26,22 @@ Kafka publishing in this spec — that's wired in when the producer exists
 
 ## Prisma schema
 
-Defined in spec 02 (`User`, `Post`, `Follow` all live in the same schema).
-No schema changes in this spec — `Post` is already modeled.
+`Post` is added in this spec (not spec 02 — spec 02 added only `User` and
+`Follow`). Shape per architecture-context.md:
+
+```prisma
+model Post {
+  id        String   @id @default(uuid())
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  content   String
+  createdAt DateTime @default(now())
+}
+```
+
+This requires adding the corresponding `posts Post[]` relation field to the
+existing `User` model, and a new migration (`prisma migrate dev`) — this
+spec's own migration, separate from spec 02's.
 
 ## CreatePostDto
 
