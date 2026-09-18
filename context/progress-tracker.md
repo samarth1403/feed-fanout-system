@@ -225,7 +225,70 @@ Each completed feature spec gets one entry:
 
 ### 05 - kafka-consumer-fanout
 
-- **Status:** Not started
+- **Status:** Done
+- **What was built:** `KafkaService` gained a generic `subscribe<T>(groupId, topic, onMessage)`
+  helper (connects a consumer, subscribes, JSON-parses each message, forwards
+  it to the caller's handler, tracks the consumer so `onModuleDestroy`
+  disconnects it) — pure wiring, no knowledge of `post.created` or fan-out.
+  `FeedModule` now owns `FanoutConsumer` (`src/feed/fanout-consumer.ts`,
+  named per the exact filename example in `code-standards.md`), which on
+  `onModuleInit` calls `kafka.subscribe('feed-fanout-consumer', 'post.created', ...)`
+  and, per message, calls `FollowsService.getFollowerIds(authorId)` then
+  `RedisService.zAdd('feed:{followerId}', score, postId)` for every follower
+  — unconditionally, no celebrity check. `FollowsService` is now exported
+  from `FollowsModule` (previously private to it) so `FeedModule` can inject
+  it; `FeedModule` also now imports `KafkaModule` and `RedisModule`. Errors
+  from `getFollowerIds` are caught/logged with `postId` and abort just that
+  message's fan-out (no throw, no crash); each follower's `zAdd` failure is
+  caught/logged individually so one bad write doesn't abort the rest.
+  Completion is logged as `Fanned out post {postId} to {n}/{total} followers`.
+  Unit tests added (`fanout-consumer.spec.ts`, 6 tests, mocking `KafkaService`/
+  `FollowsService`/`RedisService`): subscribe wiring, multi-follower fan-out,
+  zero-follower no-op, follower-lookup failure swallowed, one-bad-write
+  doesn't block the rest, and reprocessing the same message sends the same
+  idempotent write twice rather than a duplicate-producing one — 28 tests
+  passing across all spec files, `tsc --noEmit` and `nest build` both clean.
+  Verified against the live stack: `POST /posts` from an author with two
+  followers resulted in the post ID appearing in both `feed:{followerId}`
+  sorted sets (`redis-cli ZRANGE ... WITHSCORES`) with a numeric score; a
+  post from a followerless author produced zero new Redis keys, not a
+  crash; manually re-publishing the identical `post.created` message via
+  `kafka-console-producer` left `ZCARD feed:{followerId}` unchanged at 1 —
+  all three acceptance criteria confirmed directly against Redis state.
+- **Deviations from spec:** None from the spec's own scope. One ambiguity
+  resolved and flagged rather than picked silently: the spec's fan-out step
+  reads `RedisService.zAdd('feed:{followerId}', createdAt, postId)`, but
+  `RedisService.zAdd`'s existing signature (locked in spec 01) takes a
+  numeric `score`, and the event's `createdAt` (per the spec 04/
+  architecture-context.md contract) is an ISO string, not a number. Used
+  `new Date(createdAt).getTime()` (epoch ms) as the score, matching
+  architecture-context.md's Redis key structure note ("score = post
+  timestamp") literally rather than passing the string through. No other
+  interpretation makes the existing `zAdd` type-check.
+- **Notes:** During live verification, a leftover `npm run start` invocation
+  (started to test in a clean process) collided on port 3000 with an
+  already-running `nest start --watch` instance from earlier in the session,
+  briefly joining a second consumer into the `feed-fanout-consumer` group
+  before crashing on the port conflict — this triggered a consumer-group
+  rebalance that swallowed the first round of test messages (empty Redis
+  result, not a code defect). Confirmed by retesting against only the
+  pre-existing instance, which fanned out correctly; no code change was
+  needed. The stray process was not started deliberately and exited on its
+  own (crash, not killed).
+
+  **Post-review fix:** the human tested resilience to Redis being down
+  mid-fanout and found connection-level failures surfacing as raw
+  `[ioredis] Unhandled error event` console warnings instead of going
+  through `RedisService`'s own logging, because the ioredis client had no
+  `.on('error', ...)` listener attached — a gap against code-standards.md's
+  "no silent/unhandled errors" intent and spec 05's error-handling section.
+  Fixed by attaching `this.client.on('error', (error) =>
+  this.logger.error('Redis client error', error))` in `RedisService`'s
+  constructor, alongside client creation. Minor mismatch per
+  ai-workflow-rules.md (missing log line via the wrong channel) — patched
+  in place, not regenerated. Re-verified live: stopping Redis now produces
+  repeating `[RedisService] Redis client error` lines through Nest's
+  `Logger` on each reconnect attempt, with no unhandled-event warning.
 
 ### 06 - feed-read-endpoint
 

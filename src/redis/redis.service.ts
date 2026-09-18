@@ -11,6 +11,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     this.client = new Redis(this.configService.getOrThrow<string>('REDIS_URL'), {
       lazyConnect: true,
     });
+    // ioredis emits 'error' on every connection-level failure (including
+    // each retry while Redis is down); without a listener it falls back to
+    // its own unhandled-event console warning instead of this service's
+    // Logger.
+    this.client.on('error', (error) => this.logger.error('Redis client error', error));
   }
 
   async onModuleInit(): Promise<void> {

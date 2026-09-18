@@ -7,5 +7,6 @@ import { FollowsService } from './follows.service.js';
   imports: [PrismaModule],
   controllers: [FollowsController],
   providers: [FollowsService],
+  exports: [FollowsService],
 })
 export class FollowsModule {}

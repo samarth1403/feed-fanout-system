@@ -20,6 +20,7 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(KafkaService.name);
   private readonly kafka: Kafka;
   private readonly producer: Producer;
+  private readonly consumers: Consumer[] = [];
 
   constructor(private readonly configService: ConfigService) {
     this.kafka = new Kafka({
@@ -38,6 +39,7 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     await this.producer.disconnect();
+    await Promise.all(this.consumers.map((consumer) => consumer.disconnect()));
   }
 
   async publish<T extends Record<string, unknown>>(topic: string, message: T): Promise<void> {
@@ -53,5 +55,23 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 
   createConsumer(groupId: string): Consumer {
     return this.kafka.consumer({ groupId });
+  }
+
+  // Generic subscribe helper: connects a consumer, subscribes it to a topic,
+  // and forwards each parsed message to the caller's handler. Owns the
+  // connect/subscribe/run wiring only — what a topic's payload means and
+  // what to do with it is entirely up to the caller.
+  async subscribe<T>(groupId: string, topic: string, onMessage: (payload: T) => Promise<void>): Promise<void> {
+    const consumer = this.createConsumer(groupId);
+    await consumer.connect();
+    await consumer.subscribe({ topic, fromBeginning: false });
+    await consumer.run({
+      eachMessage: async ({ message }) => {
+        if (!message.value) return;
+        const payload = JSON.parse(message.value.toString()) as T;
+        await onMessage(payload);
+      },
+    });
+    this.consumers.push(consumer);
   }
 }
