@@ -19,6 +19,47 @@
 - No business logic in controllers. Controllers validate input and delegate;
   services own the logic.
 
+## Infrastructure module startup resilience (applies to all: prisma, kafka, redis, elasticsearch)
+
+No infrastructure module may block NestJS application bootstrap waiting on
+a successful connection to its external system. Connection attempts run in
+the background (fire-and-retry, not awaited in `onModuleInit`), with
+failures logged via the module's own Logger — never left as an unhandled
+promise rejection or an unhandled client error event. Each service reports
+its own successful (re)connection via an appropriate event/callback once
+established.
+
+This was verified against a real cold-start-with-service-down test for all
+four modules:
+
+- **redis** — background connect-and-retry; ioredis's own reconnect logic
+  runs independently of whether the initial connect is awaited.
+- **kafka** — background retry loop for both producer connect and consumer
+  subscribe (two separate call sites both needed the fix); kafkajs's own
+  connection retry is bounded, so an unbounded outer retry loop is needed
+  on top of it.
+- **elasticsearch** — background ping-and-retry loop; the ES client itself
+  is stateless HTTP per request, so no reconnect logic is needed beyond
+  keeping the health-check signal honest.
+- **prisma** — different case, documented separately below (Postgres is
+  the primary write path, not a secondary dependency to fail open on).
+
+## Prisma is an exception to "fail open" — it fails deliberately instead
+
+Unlike the other three infrastructure modules, Postgres is the source of
+truth, not an optional dependency — a write should genuinely fail if
+Postgres is unreachable, not silently succeed. `PrismaService.onModuleInit`
+does not need the same fire-and-retry pattern (its `$connect()` with the
+`@prisma/adapter-pg` driver adapter is already lazy — the underlying
+connection pool connects on first query, so it doesn't block bootstrap).
+What was fixed instead was the failure _shape_: a Postgres-unreachable
+error previously surfaced as a raw, unhandled 500. A shared connection-error
+check plus a global `PrismaExceptionFilter` (registered via `APP_FILTER`)
+now catches this specific failure mode and returns a clean 503 ("Database
+is temporarily unavailable") instead — every other error type (e.g. `P2002`
+duplicate-key violations already translated by individual services) passes
+through unaffected.
+
 ## Naming
 
 - Files: `kebab-case` (`post.service.ts`, `fanout-consumer.ts`)

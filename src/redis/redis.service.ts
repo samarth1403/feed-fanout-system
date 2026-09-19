@@ -16,11 +16,20 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     // its own unhandled-event console warning instead of this service's
     // Logger.
     this.client.on('error', (error) => this.logger.error('Redis client error', error));
+    // 'ready' fires on the first successful connection and again after every
+    // automatic reconnect, so one listener covers both cases.
+    this.client.on('ready', () => this.logger.log('Connected to Redis'));
   }
 
-  async onModuleInit(): Promise<void> {
-    await this.client.connect();
-    this.logger.log('Connected to Redis');
+  onModuleInit(): void {
+    // Not awaited: Redis being unreachable at startup must not block Nest's
+    // bootstrap or any request path that doesn't touch Redis (e.g.
+    // POST /posts). ioredis's own retryStrategy (see the 'error'/'ready'
+    // listeners above) keeps retrying the connection in the background
+    // regardless of how this call's promise settles — the .catch here only
+    // exists to prevent an unhandled-rejection warning from this one
+    // explicit connect() call.
+    this.client.connect().catch(() => undefined);
   }
 
   onModuleDestroy(): void {

@@ -30,11 +30,21 @@ No follower list in the event — the consumer looks up followers itself
 ## Producer configuration
 
 - Idempotent producer enabled (KafkaJS `idempotent: true`) — protects
-  against duplicate publishes if the producer itself retries a send
-  internally, independent of the consumer-side idempotency key in spec 09
+  against duplicate publishes if the producer retries a send internally,
+  independent of the consumer-side idempotency key in spec 09
 - `acks: 'all'` — wait for the event to be durably written to the topic
   before considering the publish successful, not just accepted by the
   leader broker
+- Client-level `retries: 0` — if the client cannot reach a broker at all
+  (connection-level failure), fail immediately rather than retrying the
+  connection internally for 10+ seconds. This is required so a Kafka
+  outage fails fast per the "publish failure" design decision below,
+  instead of silently blocking POST /posts for 20+ seconds while kafkajs
+  retries a dead connection under the hood.
+- Producer-level `retries: 1` — the minimum value kafkajs requires when
+  `idempotent: true` is set (an idempotent producer must be able to retry
+  at least once by definition); this is a library constraint, not a
+  deliberate resilience choice.
 - Single-partition topic is sufficient for local/MVP scale; partition
   strategy is not a tuning concern for this project
 

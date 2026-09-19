@@ -201,3 +201,14 @@ after this one builds actual behavior on top of what's set up here.
 Spec locked (patched: replaced Prisma MCP server integration with Prisma
 Skills, since Prisma's current MCP server is remote-only and scoped to
 Prisma Postgres, not applicable to our self-hosted database).
+
+## Note: global exception handling
+
+A global `PrismaExceptionFilter` (registered via `APP_FILTER`) was added
+during hardening work after spec 01 — it lives in `common/filters/` and
+intercepts Postgres-connectivity errors specifically, returning a clean 503
+rather than an unhandled 500. See code-standards.md's "Infrastructure
+module startup resilience" section for the full reasoning. This is the
+first global filter in the codebase; any future global filter should
+follow the same pattern (narrow, specific interception — never a catch-all
+that swallows errors services already handle themselves).
